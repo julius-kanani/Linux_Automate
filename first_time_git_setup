@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# Function to check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Function to prompt user for input with default value
+prompt_input() {
+  local prompt="$1"
+  local default="$2"
+  local input
+
+  read -r -p "$prompt [$default]: " input
+  echo "${input:-$default}"
+}
+
+# Function to generate SSH key if it doesn't exist
+generate_ssh_key() {
+  local email="$1"
+  local ssh_key_path=~/.ssh/id_rsa
+
+  # If email is not provided, prompt the user for it
+  if [ -z "$email" ]; then
+    echo "Email is required to generate SSH key."
+    email=$(prompt_input "Enter your email" "")
+  fi
+
+  # Check if SSH key file exists
+  if [ ! -f "$ssh_key_path" ]; then
+    echo "Generating SSH key..."
+    ssh-keygen -t rsa -b 4096 -C "$email" -f "$ssh_key_path" >/dev/null 2>&1 || {
+      echo "Failed to generate SSH key. Aborting."
+      exit 1
+    }
+    echo "SSH key generated."
+  else
+    echo "SSH key already exists."
+  fi
+}
+
+# Check if an email argument is provided
+if [ $# -eq 1 ]; then
+  github_email="$1"
+else
+  github_email=""
+fi
+
+# Update package repositories
+echo "Updating package repositories..."
+sudo apt update >/dev/null 2>&1 || {
+  echo "Failed to update package repositories. Aborting."
+  exit 1
+}
+echo "Package repositories updated."
+
+# Install Git and xclip if not already installed
+echo "Installing Git and xclip..."
+if ! command_exists git || ! command_exists xclip; then
+  sudo apt install git xclip -y >/dev/null 2>&1 || {
+    echo "Failed to install Git and xclip. Aborting."
+    exit 1
+  }
+fi
+echo "Git and xclip installed."
+
+# Check if Git is already configured
+if ! git config --get user.email >/dev/null 2>&1; then
+  # Configure Git
+  echo "Configuring Git..."
+  github_username=$(prompt_input "Enter your GitHub username" "")
+  if [ -z "$github_email" ]; then
+    github_email=$(prompt_input "Enter your GitHub email" "")
+  fi
+  git config --global user.name "$github_username"
+  git config --global user.email "$github_email"
+  echo "Git configured."
+else
+  echo "Git is already configured."
+fi
+
+# Generate SSH key
+generate_ssh_key "$github_email"
+
+# Add SSH key to SSH agent
+echo "Adding SSH key to SSH agent..."
+eval "$(ssh-agent -s)" >/dev/null 2>&1
+ssh-add ~/.ssh/id_rsa >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  echo "SSH key added to SSH agent."
+else
+  echo "Failed to add SSH key to SSH agent."
+  exit 1
+fi
+
+# Copy SSH public key to clipboard
+echo "Copying SSH public key to clipboard..."
+if [ -f ~/.ssh/id_rsa.pub ]; then
+  cat ~/.ssh/id_rsa.pub | xclip -sel clip >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    # Calculate length of longest line
+    longest_line=$(echo -e "SSH public key copied to clipboard. Please add it to your GitHub account." | wc -L)
+
+    # Determine padding
+    padding=$(( (54 - longest_line) / 2 ))
+
+    # Print rectangle
+    echo "*********************************************"
+    printf "*%*s*\n" $((padding + longest_line)) "SSH public key copied to clipboard. Please add it to your GitHub account."
+    printf "*%*s*\n" $((padding + longest_line)) "You can now paste it using Ctrl+V."
+    echo "*********************************************"
+  else
+    echo "Failed to copy SSH public key to clipboard."
+  fi
+else
+  echo "SSH public key not found. Please check if the key was generated."
+fi
+
+echo "Setup complete."
